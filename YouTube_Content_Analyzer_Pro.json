@@ -1,0 +1,1729 @@
+{
+  "name": "YouTube Content Analyzer Pro",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze-youtube",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "df71d00f-803f-4342-99c9-01408c8d7720",
+      "name": "[TRIGGER] Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -5840,
+        -688
+      ],
+      "webhookId": "youtube-analyzer-webhook",
+      "notes": "🎯 POINT D'ENTRÉE - Webhook\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nReçoit une URL YouTube via POST.\n\n📥 Input:\n{\n  \"url\": \"https://youtube.com/watch?v=XXX\",\n  \"options\": { \"language\": \"fr\" }\n}\n\n📤 Output: Passe au parsing URL"
+    },
+    {
+      "parameters": {
+        "jsCode": "const urlData = $('[EXTRACT] Parse URL').first().json;\nconst video = items[0].json;\n\n// Parse ISO 8601 duration (PT1H2M10S) to seconds\nfunction parseDuration(durationStr) {\n  if (!durationStr) return null;\n  const match = durationStr.match(/PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?/);\n  if (!match) return null;\n  const hours = parseInt(match[1]) || 0;\n  const minutes = parseInt(match[2]) || 0;\n  const seconds = parseInt(match[3]) || 0;\n  return hours * 3600 + minutes * 60 + seconds;\n}\n\n// Format seconds to HH:MM:SS or MM:SS\nfunction formatDuration(seconds) {\n  if (!seconds) return null;\n  const h = Math.floor(seconds / 3600);\n  const m = Math.floor((seconds % 3600) / 60);\n  const s = seconds % 60;\n  if (h > 0) {\n    return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;\n  }\n  return `${m}:${String(s).padStart(2,'0')}`;\n}\n\nconst durationSeconds = parseDuration(video.contentDetails?.duration);\n\nreturn [{\n  json: {\n    video_id: urlData.video_id,\n    url: urlData.original_url,\n    title: video.snippet?.title || 'Titre inconnu',\n    channel: {\n      name: video.snippet?.channelTitle || 'Chaîne inconnue',\n      url: `https://www.youtube.com/channel/${video.snippet?.channelId}`\n    },\n    thumbnail: video.snippet?.thumbnails?.maxres?.url || \n               video.snippet?.thumbnails?.high?.url || \n               video.snippet?.thumbnails?.medium?.url,\n    duration_seconds: durationSeconds,\n    duration_formatted: formatDuration(durationSeconds),\n    view_count: parseInt(video.statistics?.viewCount) || null,\n    like_count: parseInt(video.statistics?.likeCount) || null,\n    comment_count: parseInt(video.statistics?.commentCount) || null,\n    publish_date: video.snippet?.publishedAt?.split('T')[0] || null,\n    description: (video.snippet?.description || '').substring(0, 500),\n    tags: video.snippet?.tags || [],\n    options: urlData.options,\n    started_at: urlData.started_at\n  }\n}];"
+      },
+      "id": "b251857e-83a5-4b64-9be5-13f2b63e6f28",
+      "name": "[EXTRACT] Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5168,
+        -592
+      ],
+      "notes": "🏗️ CONSTRUCTION CONTEXTE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nFusionne Parse URL + YouTube API.\n\n📤 Output: Objet vidéo normalisé\n• video_id, url, title, channel\n• duration_seconds/formatted\n• view_count, like_count\n• publish_date, description, tags"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "youtube_analyses",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "video_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.video_id }}"
+            }
+          ]
+        }
+      },
+      "id": "7141fca9-e213-4fd6-8bb0-39542c9ae54d",
+      "name": "[CACHE] Check Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -4944,
+        -656
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "dsWVAzaapOrxAoXP",
+          "name": "Supabase account 3"
+        }
+      },
+      "notes": "🔍 VÉRIFICATION CACHE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCherche si video_id existe en base.\n\n📊 Table: youtube_analyses\n🔎 Filter: video_id = current\n\n📤 Output: Ligne existante ou vide"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cache-exists-condition",
+              "leftValue": "={{ $json.analysis_data }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8b4179c7-9ec7-4584-993e-7c7a2237bb9b",
+      "name": "[CACHE] IF Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -4496,
+        -592
+      ],
+      "notes": "❓ CACHE TROUVÉ ?\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCondition: created_at is not empty\n\n✅ TRUE → Retourne le cache\n❌ FALSE → Continue le traitement"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cached = items[0].json;\nreturn [{\n  json: {\n    ...cached.analysis_data,\n    from_cache: true,\n    cached_at: cached.created_at\n  }\n}];"
+      },
+      "id": "fa56ea1e-c804-4519-a3e0-a46a4f6542aa",
+      "name": "[CACHE] Return Cached",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -944
+      ],
+      "notes": "⚡ RETOUR CACHE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRetourne l'analyse en cache.\n\n📤 Output: analysis_data + from_cache: true\n⏱️ Temps: ~100ms au lieu de ~45s"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "d0ed4c18-ee88-4788-8df6-de3078211774",
+              "leftValue": "={{ $json.transcript.available }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "30e64342-1208-4d82-be14-77ab866523fb",
+              "leftValue": "={{ $('[EXTRACT] Build Context').item.json.duration_seconds }}",
+              "rightValue": 1800,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9144aaa8-713c-45f1-802e-dfc956357774",
+      "name": "[ROUTE] Check Duration",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3392,
+        -304
+      ],
+      "notes": "⏱️ ROUTAGE PAR DURÉE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCondition: duration_seconds > 1800 (30min)\n        OU word_count > 8000\n\n✅ TRUE → Map-Reduce (chunking)\n❌ FALSE → Traitement direct"
+    },
+    {
+      "parameters": {},
+      "id": "33a13fac-870b-4528-95a5-9159f1a04d87",
+      "name": "[ROUTE] Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -2368,
+        -304
+      ],
+      "notes": "🔀 FUSION CHEMINS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRéunit les chemins court/long.\n\nMode: Append\n📤 Output: Données prêtes pour analyse IA"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. On récupère le contexte du Transcript\n// CORRECTION : On cible \"[ROUTE] Merge Paths\" au lieu de \"[TRANSCR] Process\" (qui n'existe plus)\nconst transcriptContext = $('[ROUTE] Merge Paths').first().json;\n\n// 2. On récupère les métadonnées originales (durée, vues, etc.)\nconst videoData = $('[EXTRACT] Build Context').first().json;\n\nfunction parseAIResponse(nodeData) {\n  try {\n    let content = nodeData.message?.content || nodeData.content || nodeData.text || '';\n    \n    if (Array.isArray(content)) {\n      content = content.map(c => c.text || c).join('');\n    }\n    \n    if (typeof content !== 'string') content = JSON.stringify(content);\n    \n    const jsonMatch = content.match(/```json\\s*([\\s\\S]*?)\\s*```/) ||\n                      content.match(/```\\s*([\\s\\S]*?)\\s*```/) ||\n                      content.match(/\\{[\\s\\S]*\\}/);\n    \n    const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;\n    return JSON.parse(jsonStr.trim());\n  } catch (e) {\n    return { error: 'Parse failed: ' + e.message };\n  }\n}\n\nlet summaryData = {}, insightsData = {};\n\ntry {\n  const summaryRaw = $('[ANALYZE] AI - Summary').first().json;\n  summaryData = parseAIResponse(summaryRaw) || {};\n} catch (e) { summaryData = { error: e.message }; }\n\ntry {\n  const insightsRaw = $('[ANALYZE] AI - Insights').first().json;\n  insightsData = parseAIResponse(insightsRaw) || {};\n} catch (e) { insightsData = { error: e.message }; }\n\nconst classificationData = summaryData?.classification || { content_type: 'unknown' };\nconst recommendedOutputs = summaryData?.recommended_outputs || {\n  linkedin: true,\n  twitter: true,\n  newsletter: false,\n  reasoning: 'Défaut - AI non disponible'\n};\n\nreturn [{\n  json: {\n    video: {\n      id: videoData.video_id,\n      url: videoData.url,\n      title: videoData.title,\n      channel: videoData.channel,\n      thumbnail: videoData.thumbnail,\n      duration_seconds: videoData.duration_seconds,\n      duration_formatted: videoData.duration_formatted,\n      view_count: videoData.view_count,\n      like_count: videoData.like_count,\n      comment_count: videoData.comment_count,\n      publish_date: videoData.publish_date,\n      tags: videoData.tags || []\n    },\n    transcript: {\n      // On utilise les données qui sortent du Merge Paths (qui contient soit Apify direct, soit le Map-Reduce agrégé)\n      available: transcriptContext.transcript?.available ?? false,\n      source: transcriptContext.transcript?.source || 'apify_aggregated',\n      word_count: transcriptContext.transcript?.word_count || 0\n    },\n    classification: {\n      ...classificationData,\n      recommended_outputs: recommendedOutputs\n    },\n    summary: summaryData?.summary || summaryData || {},\n    chapters: summaryData?.chapters || [],\n    structure: summaryData?.structure || {},\n    sentiment: insightsData?.sentiment || {},\n    insights: insightsData?.insights || [],\n    quotes: insightsData?.quotes || [],\n    takeaways: insightsData?.actionable_takeaways || [],\n    contrarian_views: insightsData?.contrarian_views || [],\n    resources: insightsData?.resources_mentioned || [],\n    options: videoData.options,\n    started_at: videoData.started_at\n  }\n}];"
+      },
+      "id": "303b5f19-2ed4-489c-870d-f570fd627f69",
+      "name": "[ANALYZE] Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        -304
+      ],
+      "notes": "📋 FUSION RÉSULTATS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nParse et structure les réponses IA.\n\n📤 Output: Objet complet avec:\n• video, transcript, classification\n• summary, chapters, structure\n• sentiment, insights, quotes, takeaways"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = items[0].json;\n\nlet score = 50;\n\n// 1. DÉTECTION INTELLIGENTE DU CONTENU\n// Même si le flag 'transcript.available' est false, si on a des chapitres ou un résumé,\n// c'est que l'analyse a fonctionné. On évite ainsi la pénalité injuste.\nconst hasAnalysis = (data.chapters && data.chapters.length > 0) || \n                   (data.summary && data.summary.executive_summary);\n                   \nconst hasTranscript = data.transcript?.available || (data.transcript?.word_count > 0) || hasAnalysis;\n\nif (hasTranscript) score += 10;\nelse score -= 20; // Pénalité seulement si VRAIMENT rien n'a été analysé\n\n// 2. VOLUME ET DENSITÉ (+10 max)\n// Fallback sur la durée (duration_seconds) si word_count est à 0 ou absent\nconst wordCount = data.transcript?.word_count || 0;\nconst duration = data.video?.duration_seconds || 0;\n\n// Bonus niveau 1 (> 1000 mots ou > 5 min)\nif (wordCount > 1000 || duration > 300) score += 5;\n// Bonus niveau 2 (> 3000 mots ou > 15 min)\nif (wordCount > 3000 || duration > 900) score += 5;\n\n// 3. RICHESSE DE L'ANALYSE (+38 max)\nconst chapterCount = data.chapters?.length || 0;\nconst insightCount = data.insights?.length || 0;\nconst takeawayCount = data.takeaways?.length || 0;\nconst quoteCount = data.quotes?.length || 0;\n\nif (chapterCount >= 3) score += 5;\nif (chapterCount >= 5) score += 5;\n\nif (insightCount >= 3) score += 5;\nif (insightCount >= 5) score += 5;\n\nif (takeawayCount >= 3) score += 5;\n\nif (quoteCount >= 2) score += 3;\n\n// 4. QUALITÉ ESTIMÉE (+5)\n// On utilise le niveau d'expertise comme proxy de qualité si estimated_quality est absent\nconst expertise = data.classification?.expertise_level || '';\nconst aiQuality = data.classification?.estimated_quality || 0;\n\nif (aiQuality >= 7 || expertise === 'intermediate' || expertise === 'advanced') {\n    score += 5;\n}\n\n// 5. PÉNALITÉS D'ERREURS\nif (data.summary?.error) score -= 15;\nif (data.sentiment?.error) score -= 10;\n\n// Bornage du score entre 0 et 100\nscore = Math.max(0, Math.min(100, score));\n\n// Attribution du Grade\nlet grade = 'F';\nif (score >= 90) grade = 'A+';\nelse if (score >= 80) grade = 'A';\nelse if (score >= 70) grade = 'B';\nelse if (score >= 60) grade = 'C';\nelse if (score >= 50) grade = 'D';\n\nreturn [{\n  json: {\n    ...data,\n    quality_score: {\n      score: score,\n      grade: grade,\n      factors: {\n        has_transcript: hasTranscript,\n        content_metric: wordCount > 0 ? `${wordCount} words` : `${Math.round(duration/60)} min`,\n        chapter_count: chapterCount,\n        insight_count: insightCount,\n        takeaway_count: takeawayCount,\n        bonus_expertise: (expertise === 'intermediate' || expertise === 'advanced')\n      }\n    }\n  }\n}];"
+      },
+      "id": "f2112eda-fcaf-457c-bdcc-3683b9e79012",
+      "name": "[SCORE] Calculate Quality",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        -304
+      ],
+      "notes": "📈 CALCUL SCORE QUALITÉ\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nScore 0-100 basé sur:\n\n✅ +10 Transcript disponible\n✅ +10 Volume contenu (>1000 mots)\n✅ +38 Richesse analyse (chapters, insights)\n✅ +5  Qualité estimée\n\n❌ -20 Pas de transcript\n❌ -15 Erreur summary\n❌ -10 Erreur sentiment\n\n📤 Output: quality_score { score, grade, factors }"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "ae6daa38-7b78-4127-99cb-e09e352b7240",
+              "leftValue": "={{ $json.options?.generate_linkedin === true || ($json.options?.generate_linkedin !== false && $json.classification?.recommended_outputs?.linkedin === true) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "5a22bc26-107e-463d-baab-d625407f4aeb",
+      "name": "[GEN] IF LinkedIn",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        -688
+      ],
+      "notes": "❓ GÉNÉRER LINKEDIN ?\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCondition: classification.recommended_outputs.linkedin === true\n\nL'IA décide si le contenu mérite un post LinkedIn."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "twitter-condition",
+              "leftValue": "={{ $json.options?.generate_twitter === true || ($json.options?.generate_twitter !== false && $json.classification?.recommended_outputs?.twitter === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b73b272c-3fdf-4ba8-8152-da2d18f390a3",
+      "name": "[GEN] IF Twitter",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        -304
+      ],
+      "notes": "❓ GÉNÉRER TWITTER ?\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCondition: classification.recommended_outputs.twitter === true\n\nL'IA décide si le contenu mérite un thread Twitter."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "newsletter-condition",
+              "leftValue": "={{ $json.options?.generate_newsletter === true || ($json.options?.generate_newsletter !== false && $json.classification?.recommended_outputs?.newsletter === true) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "43460ab6-30d1-42d1-b1d0-4db41ef42fb6",
+      "name": "[GEN] IF Newsletter",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        96
+      ],
+      "notes": "❓ GÉNÉRER NEWSLETTER ?\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCondition: classification.recommended_outputs.newsletter === true\n\nL'IA décide si le contenu mérite une newsletter."
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "0b72de7a-6874-46ae-ae31-931590d09a90",
+      "name": "[GEN] Merge Content",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -544,
+        -336
+      ],
+      "notes": "🔀 FUSION CONTENUS GÉNÉRÉS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCombine tous les contenus générés.\n\nMode: Append (accepte 0 à 3 inputs)\n📤 Output: Array de contenus générés"
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = $('[SCORE] Calculate Quality').first().json;\n\nfunction safeGetGenerated(nodeName) {\n  try {\n    const raw = $(nodeName).first().json;\n    let content = raw.content || '';\n    \n    if (Array.isArray(content)) {\n      content = content.map(c => c.text || c).join('');\n    }\n    \n    if (typeof content !== 'string') return null;\n    const match = content.match(/\\{[\\s\\S]*\\}/);\n    return match ? JSON.parse(match[0]) : null;\n  } catch (e) {\n    return null;\n  }\n}\n\nlet linkedin = null, twitter = null, newsletter = null;\n\ntry { linkedin = safeGetGenerated('[GEN] AI - LinkedIn'); } catch (e) {}\ntry { twitter = safeGetGenerated('[GEN] AI - Twitter'); } catch (e) {}\ntry { newsletter = safeGetGenerated('[GEN] AI - Newsletter'); } catch (e) {}\n\nconst report = {\n  id: `yt_${analysis.video.id}_${Date.now()}`,\n  generated_at: new Date().toISOString(),\n  processing_time_ms: Date.now() - new Date(analysis.started_at).getTime(),\n  \n  video: analysis.video,\n  \n  classification: analysis.classification,\n  quality_score: analysis.quality_score,\n  transcript: analysis.transcript,\n  \n  summary: analysis.summary,\n  chapters: analysis.chapters,\n  structure: analysis.structure,\n  \n  sentiment: analysis.sentiment,\n  insights: analysis.insights,\n  quotes: analysis.quotes,\n  takeaways: analysis.takeaways,\n  contrarian_views: analysis.contrarian_views,\n  resources: analysis.resources,\n  \n  generated_content: {\n    linkedin: linkedin?.linkedin_post || null,\n    twitter: twitter?.twitter_thread || null,\n    newsletter: newsletter?.newsletter || null\n  },\n  \n  stats: {\n    view_count: analysis.video.view_count,\n    like_count: analysis.video.like_count,\n    comment_count: analysis.video.comment_count,\n    word_count: analysis.transcript.word_count,\n    chapter_count: analysis.chapters?.length || 0,\n    insight_count: analysis.insights?.length || 0,\n    quote_count: analysis.quotes?.length || 0,\n    takeaway_count: analysis.takeaways?.length || 0\n  },\n  \n  meta: {\n    version: '2.0.0',\n    workflow: 'YouTube Content Analyzer Pro',\n    models_used: ['claude-sonnet-4-20250514'],\n    options: analysis.options\n  }\n};\n\nreturn [{ json: report }];"
+      },
+      "id": "a265ddf2-6557-47ee-8270-16c346f263f0",
+      "name": "[OUTPUT] Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -320
+      ],
+      "notes": "📋 CONSTRUCTION RAPPORT FINAL\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAssemble tous les éléments.\n\n📤 Output JSON:\n• id, generated_at, processing_time_ms\n• video, classification, quality_score\n• summary, chapters, insights, quotes\n• generated_content (linkedin, twitter, newsletter)\n• stats, meta"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "youtube_analyses",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "video_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.video.id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "video_id",
+              "fieldValue": "={{ $json.video.id }}"
+            },
+            {
+              "fieldId": "video_url",
+              "fieldValue": "={{ $json.video.url }}"
+            },
+            {
+              "fieldId": "video_title",
+              "fieldValue": "={{ $json.video.title }}"
+            },
+            {
+              "fieldId": "channel_name",
+              "fieldValue": "={{ $json.video.channel.name }}"
+            },
+            {
+              "fieldId": "analysis_data",
+              "fieldValue": "={{ JSON.stringify($json) }}"
+            },
+            {
+              "fieldId": "quality_score",
+              "fieldValue": "={{ $json.quality_score.score }}"
+            }
+          ]
+        }
+      },
+      "id": "36ce5f12-51da-42a7-a85f-3244136eb1ff",
+      "name": "[DB] Save to Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        576,
+        -784
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "dsWVAzaapOrxAoXP",
+          "name": "Supabase account 3"
+        }
+      },
+      "notes": "💾 SAUVEGARDE SUPABASE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nMet à jour l'entrée avec l'analyse complète.\n\n📊 Table: youtube_analyses\n🔄 Operation: Update (WHERE video_id)\n📝 Data: analysis_data = full JSON"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#youtube-analyses",
+          "mode": "name"
+        },
+        "text": "=🎬 *Nouvelle analyse YouTube terminée!*\n\n*Vidéo:* {{ $('[OUTPUT] Build Report').item.json.video.title }}\n*Chaîne:* {{ $('[OUTPUT] Build Report').item.json.video.channel.name }}\n*Score qualité:* {{ $('[OUTPUT] Build Report').item.json.quality_score.grade }} ({{ $('[OUTPUT] Build Report').item.json.quality_score.score }}/100)\n\n📊 *Stats:*\n• {{ $('[OUTPUT] Build Report').item.json.quality_score.factors.insight_count }} insights extraits\n• {{ $('[OUTPUT] Build Report').item.json.quality_score.factors.chapter_count }} chapitres détectés\n• {{ $('[OUTPUT] Build Report').item.json.transcript.word_count }} mots analysés\n\n---\n\n🔗 {{ $('[OUTPUT] Build Report').item.json.video.url }}\n📋 {{ $('[NOTION] Create Page').first().json.url }}",
+        "otherOptions": {}
+      },
+      "id": "71fac15c-3d1f-4021-bf87-311fdf2f4bb0",
+      "name": "[NOTIFY] Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        576,
+        -224
+      ],
+      "webhookId": "d8b0798b-0ba1-45a4-a7f9-6d4754ae050c",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "nWKvicnhdLdQ1zj6",
+          "name": "Slack account"
+        }
+      },
+      "notes": "📢 NOTIFICATION SLACK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nEnvoie un résumé dans Slack.\n\n📤 Message:\n✅ Analyse YouTube terminée\n📺 {titre} | 👤 {chaîne}\n⭐ Score: {score}/100\n📋 {lien Notion}"
+    },
+    {
+      "parameters": {},
+      "id": "646c4d37-0c58-430d-b020-7966d36c7173",
+      "name": "[OUTPUT] Merge Final",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        800,
+        -320
+      ],
+      "notes": "🔀 FUSION FINALE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAttend Supabase + Notion + Slack.\n\nMode: Combine\n📤 Output: Prêt pour réponse webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-Workflow-Version",
+                "value": "2.0.0"
+              }
+            ]
+          }
+        }
+      },
+      "id": "614369d2-1484-4e0b-a04b-5fe50d968451",
+      "name": "[OUTPUT] Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1024,
+        -592
+      ],
+      "notes": "📤 RÉPONSE WEBHOOK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRetourne le rapport JSON complet.\n\n📊 Status: 200 OK\n📤 Body: Rapport d'analyse complet"
+    },
+    {
+      "parameters": {},
+      "id": "f67ed797-6b8a-478a-9550-01955beaea05",
+      "name": "[ERROR] Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -5840,
+        384
+      ],
+      "notes": "🚨 CAPTURE ERREURS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nDéclenché automatiquement en cas d'erreur.\n\n📤 Output: Détails de l'erreur"
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = items[0].json;\n\nreturn [{\n  json: {\n    error: true,\n    message: error.message || 'Unknown error',\n    node: error.node?.name || 'Unknown',\n    execution_id: $execution?.id || 'unknown',\n    timestamp: new Date().toISOString(),\n    workflow: 'YouTube Content Analyzer Pro',\n    stack: error.stack?.substring(0, 500) || null\n  }\n}];"
+      },
+      "id": "4467995e-6732-4b0a-be87-7d4af745642c",
+      "name": "[ERROR] Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5616,
+        384
+      ],
+      "notes": "📝 FORMATAGE ERREUR\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nStructure l'erreur pour debug.\n\n📤 Output:\n• error: true\n• message, node, execution_id\n• timestamp, workflow, stack"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#alerts-n8n",
+          "mode": "name"
+        },
+        "text": "=🚨 *ERREUR - YouTube Analyzer*\n\n*Node:* {{ $json.node }}\n*Message:* {{ $json.message }}\n*Execution:* {{ $json.execution_id }}\n*Time:* {{ $json.timestamp }}",
+        "otherOptions": {}
+      },
+      "id": "1ebb15b2-675b-4fd6-88cd-53de12cb3668",
+      "name": "[ERROR] Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        -5392,
+        384
+      ],
+      "webhookId": "2128aaa2-fa6a-4c58-863c-f4c9c681fb07",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "nWKvicnhdLdQ1zj6",
+          "name": "Slack account"
+        }
+      },
+      "notes": "🚨 ALERTE SLACK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNotifie l'équipe en cas d'erreur.\n\n📤 Message: ❌ Erreur {node}: {message}"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "90dd382d-b5be-4d4f-b504-0e308d5aa99b",
+      "name": "[ERROR] Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -5168,
+        384
+      ],
+      "notes": "📤 RÉPONSE ERREUR\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRetourne l'erreur formatée.\n\n📊 Status: 500 Internal Server Error\n📤 Body: Détails de l'erreur"
+    },
+    {
+      "parameters": {
+        "jsCode": "// No-op passthrough for conditional paths that don't generate content\nreturn items;"
+      },
+      "id": "a31e8e5b-da53-4832-87fc-6dba43a8ece4",
+      "name": "[GEN] LinkedIn NoOp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -608
+      ],
+      "notes": "⏭️ SKIP LINKEDIN\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPassthrough quand LinkedIn non recommandé.\nGarde le flux intact sans génération."
+    },
+    {
+      "parameters": {
+        "jsCode": "// No-op passthrough for conditional paths that don't generate content\nreturn items;"
+      },
+      "id": "152fc9a8-79da-4056-b982-23b9ac65e715",
+      "name": "[GEN] Twitter NoOp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -224
+      ],
+      "notes": "⏭️ SKIP TWITTER\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPassthrough quand Twitter non recommandé.\nGarde le flux intact sans génération."
+    },
+    {
+      "parameters": {
+        "jsCode": "// No-op passthrough for conditional paths that don't generate content\nreturn items;"
+      },
+      "id": "b184d6ab-20c8-4077-9943-6ab50cb1daea",
+      "name": "[GEN] Newsletter NoOp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        160
+      ],
+      "notes": "⏭️ SKIP NEWSLETTER\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPassthrough quand Newsletter non recommandée.\nGarde le flux intact sans génération."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyse cette vidéo YouTube et génère un résumé structuré.\n\n## CONTEXTE VIDÉO\nTitre: {{ $json.video_title }}\nChaîne: {{ $json.channel_name }}\nDurée: {{ $json.duration_formatted || 'Non disponible' }}\n\n## TRANSCRIPTION\n{{ $json.transcript.full_text.substring(0, 14000) }}\n\nGénère l'analyse structurée en JSON."
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "Tu es un expert en analyse de contenu vidéo. Tu produis des analyses structurées, précises et actionnables.\n\nGÉNÈRE UN JSON VALIDE avec cette structure:\n{\n  \"summary\": {\n    \"one_liner\": \"Résumé en une phrase percutante (max 120 caractères)\",\n    \"executive_summary\": \"Résumé exécutif en 3-5 phrases pour un décideur pressé\",\n    \"key_points\": [\n      \"Point clé 1 - actionnable et spécifique\",\n      \"Point clé 2\",\n      \"Point clé 3\",\n      \"Point clé 4\",\n      \"Point clé 5\"\n    ],\n    \"tldr\": \"Version ultra-courte en 1-2 phrases\"\n  },\n  \"chapters\": [\n    {\n      \"title\": \"Titre du chapitre\",\n      \"timestamp\": \"MM:SS\",\n      \"duration_estimate\": \"X min\",\n      \"summary\": \"Ce qui est couvert dans ce chapitre\",\n      \"key_takeaway\": \"Le point le plus important de ce chapitre\"\n    }\n  ],\n  \"structure\": {\n    \"has_intro\": true,\n    \"has_conclusion\": true,\n    \"main_sections\": 5,\n    \"pacing\": \"slow|medium|fast\"\n  },\n  \"classification\": {\n    \"content_type\": \"tutorial|interview|review|news|educational|entertainment|podcast|vlog\",\n    \"primary_topic\": \"Sujet principal\",\n    \"secondary_topics\": [\"topic1\", \"topic2\"],\n    \"target_audience\": \"Description de l'audience cible\",\n    \"expertise_level\": \"beginner|intermediate|advanced\"\n  },\n  \"recommended_outputs\": {\n    \"linkedin\": true,\n    \"twitter\": true,\n    \"newsletter\": false,\n    \"reasoning\": \"Explication courte du choix\"\n  }\n}\n\nRÈGLES CLASSIFICATION:\n- linkedin: true si contenu professionnel, business, éducatif, tech, carrière, leadership\n- twitter: true si contenu avec insights rapides, quotable, news, opinions, tendances\n- newsletter: true si contenu dense, long format, analyse approfondie qui mérite un digest\n\nRÈGLES GÉNÉRALES:\n- 5-8 chapitres maximum\n- 5-7 points clés\n- Timestamps au format MM:SS\n- JSON VALIDE UNIQUEMENT, pas de markdown",
+          "maxTokens": 4096,
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -2144,
+        -800
+      ],
+      "id": "0bb4df8c-7c0c-48e0-86f6-0ab713609e78",
+      "name": "[ANALYZE] AI - Summary",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "🧠 ANALYSE IA - RÉSUMÉ\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nGénère résumé structuré + classification.\n\n🤖 Model: Claude Sonnet 4.5\n🌡️ Temperature: 0.3\n📊 Max Tokens: 4096\n\n📤 Output JSON:\n• summary (one_liner, executive, key_points)\n• chapters (timestamps + résumés)\n• classification (type, topics, audience)\n• recommended_outputs (linkedin, twitter, newsletter)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyse le sentiment et extrais les insights de cette vidéo.\n\n## CONTEXTE\nTitre: {{ $json.video_title }}\nChaîne: {{ $json.channel_name }}\n\n## TRANSCRIPTION\n{{ $json.transcript.full_text.substring(0, 12000) }}\n\nGénère l'analyse de sentiment et insights."
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "Tu es un expert en extraction d'insights et analyse de sentiment pour le contenu vidéo.\n\nGÉNÈRE UN JSON VALIDE:\n\n{\n  \"sentiment\": {\n    \"overall\": \"positive|negative|neutral|mixed\",\n    \"score\": 0.0-1.0,\n    \"confidence\": 0.0-1.0,\n    \"tone\": [\"informatif\", \"enthousiaste\", \"critique\"],\n    \"emotional_arc\": \"Description de l'évolution émotionnelle de la vidéo\"\n  },\n  \"insights\": [\n    {\n      \"insight\": \"L'insight actionnable et spécifique\",\n      \"context\": \"Le contexte ou la citation qui supporte cet insight\",\n      \"category\": \"strategy|tactic|mindset|tool|trend|warning\",\n      \"importance\": \"high|medium|low\",\n      \"applicable_to\": \"À qui cet insight s'applique\"\n    }\n  ],\n  \"quotes\": [\n    {\n      \"quote\": \"Citation mémorable (paraphrasée)\",\n      \"speaker\": \"Qui l'a dit\",\n      \"significance\": \"Pourquoi c'est important\",\n      \"tweetable\": true\n    }\n  ],\n  \"actionable_takeaways\": [\n    {\n      \"action\": \"Action concrète à faire\",\n      \"effort\": \"low|medium|high\",\n      \"impact\": \"low|medium|high\",\n      \"timeframe\": \"immediate|short-term|long-term\"\n    }\n  ],\n  \"contrarian_views\": [\n    \"Point de vue controversé ou contre-intuitif mentionné\"\n  ],\n  \"resources_mentioned\": [\n    {\n      \"name\": \"Nom de la ressource\",\n      \"type\": \"book|tool|website|person|concept\",\n      \"context\": \"Comment c'est mentionné\"\n    }\n  ]\n}\n\nRÈGLES:\n- 5-8 insights maximum\n- 2-4 citations mémorables\n- 3-5 actions concrètes avec priorisation\n- Sentiment score: 0=très négatif, 0.5=neutre, 1=très positif\n- JSON VALIDE UNIQUEMENT",
+          "maxTokens": 3000,
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -2144,
+        -208
+      ],
+      "id": "eb6fa259-1b86-440b-b0b2-e0b3f5630b53",
+      "name": "[ANALYZE] AI - Insights",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "🧠 ANALYSE IA - INSIGHTS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nExtrait insights et sentiment.\n\n🤖 Model: Claude Sonnet 4.5\n🌡️ Temperature: 0.2\n📊 Max Tokens: 3000\n\n📤 Output JSON:\n• sentiment (score, tone, emotional_arc)\n• insights (business, tech, personal)\n• quotes (citations mémorables)\n• takeaways (actions concrètes)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Crée un thread Twitter viral sur cette vidéo.\n\n## VIDÉO\nTitre: {{ $json.video.title }}\nURL: {{ $json.video.url }}\n\n## POINTS CLÉS\n{{ $json.summary.key_points ? $json.summary.key_points.join('\\n') : 'N/A' }}\n\n## INSIGHTS\n{{ $json.insights ? $json.insights.slice(0,5).map(i => '• ' + i.insight).join('\\n') : 'N/A' }}\n\n## CITATIONS\n{{ $json.quotes ? $json.quotes.slice(0,2).map(q => '\"' + q.quote + '\"').join('\\n') : 'N/A' }}\n\nGénère le thread Twitter de 6-7 tweets."
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "Tu es un expert Twitter/X qui a fait croître plusieurs comptes à 100k+ followers. Tu crées des threads viraux.\n\nFORMAT THREAD TWITTER:\n- Tweet 1: HOOK EXPLOSIF + annonce du thread (🧵)\n- Tweets 2-6: Un insight MAJEUR par tweet, numérotés\n- Tweet final: Récap + CTA fort + lien vidéo\n\nRÈGLES ABSOLUES:\n- MAX 280 caractères par tweet (STRICT)\n- Chaque tweet doit avoir de la valeur STANDALONE\n- Numérotation claire (1/, 2/, etc. ou •)\n- Emojis stratégiques (1-2 par tweet max)\n- Phrases courtes et percutantes\n- Pas de hashtags dans les tweets intermédiaires\n- Hashtags uniquement dans le dernier tweet (2-3 max)\n\nSTRUCTURE IDÉALE:\nTweet 1: Hook + \"Un thread 🧵\"\nTweet 2: Contexte rapide\nTweets 3-5: Les pépites (1 par tweet)\nTweet 6: L'insight le plus contre-intuitif\nTweet 7: Récap + CTA + source\n\nGÉNÈRE UN JSON:\n{\n  \"twitter_thread\": {\n    \"total_tweets\": 6,\n    \"tweets\": [\n      {\n        \"number\": 1,\n        \"content\": \"Contenu du tweet (max 280 chars)\",\n        \"char_count\": 180,\n        \"purpose\": \"hook|context|insight|contrarian|recap\"\n      }\n    ],\n    \"estimated_reach\": \"low|medium|high|viral\",\n    \"best_posting_time\": \"Suggestion\"\n  }\n}\n\nJSON UNIQUEMENT.",
+          "maxTokens": 2000,
+          "temperature": 0.7
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        -416
+      ],
+      "id": "1411da6d-2dfc-4c54-b428-4b9b0230525d",
+      "name": "[GEN] AI - Twitter",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "🐦 GÉNÉRATION TWITTER\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCrée un thread Twitter engageant.\n\n🤖 Model: Claude Sonnet 4.5\n🌡️ Temperature: 0.7\n📊 Max Tokens: 2000\n\n📤 Output: tweets[] (6-8 tweets, max 280 chars)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Crée une intro de newsletter pour cette analyse vidéo.\n\nTitre: {{ $json.video.title }}\nChaîne: {{ $json.video.channel.name }}\nRésumé: {{ $json.summary.executive_summary || $json.summary.one_liner || 'N/A' }}\nInsight principal: {{ $json.insights && $json.insights[0] ? $json.insights[0].insight : 'N/A' }}"
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "Tu es un expert en newsletters avec un style engageant et accessible.\n\nGénère une intro de newsletter qui donne envie de lire l'analyse complète.\n\nFORMAT:\n{\n  \"newsletter\": {\n    \"subject_line\": \"Objet d'email accrocheur (max 60 chars)\",\n    \"preview_text\": \"Texte de prévisualisation (max 100 chars)\",\n    \"intro_paragraph\": \"2-3 phrases d'accroche personnelles\",\n    \"key_insight_teaser\": \"L'insight principal qui donne envie d'en savoir plus\",\n    \"bullet_teaser\": [\n      \"Ce que vous allez découvrir #1\",\n      \"Ce que vous allez découvrir #2\",\n      \"Ce que vous allez découvrir #3\"\n    ],\n    \"cta_text\": \"Texte du bouton CTA\"\n  }\n}\n\nJSON UNIQUEMENT.",
+          "maxTokens": 2000,
+          "temperature": 0.6
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        -32
+      ],
+      "id": "34a8743d-89be-4919-b52a-9a24b3dee533",
+      "name": "[GEN] AI - Newsletter",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "📧 GÉNÉRATION NEWSLETTER\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCrée un digest email.\n\n🤖 Model: Claude Sonnet 4.5\n🌡️ Temperature: 0.6\n📊 Max Tokens: 2000\n\n📤 Output: subject, preview, intro, bullets, cta"
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "get",
+        "videoId": "={{ $json.video_id }}",
+        "part": [
+          "snippet",
+          "contentDetails",
+          "statistics"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        -5392,
+        -592
+      ],
+      "id": "3c4987a4-6dd3-4169-ba86-dc7b251196e7",
+      "name": "[EXTRACT] YouTube API",
+      "alwaysOutputData": false,
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "bbBQYCjIBmBO3THS",
+          "name": "YouTube account"
+        }
+      },
+      "notes": "📺 YOUTUBE DATA API v3\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRécupère les métadonnées officielles.\n\n📤 Output:\n• snippet (titre, chaîne, description)\n• contentDetails (durée)\n• statistics (vues, likes, comments)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = items[0].json;\n\n// Support multiple input formats: webhook body, direct url, or chat input\nconst url = input.body?.url || input.url || input.chatInput;\n\nif (!url) throw new Error('URL YouTube manquante');\n\nconst patterns = [\n  /(?:youtube\\.com\\/watch\\?v=)([a-zA-Z0-9_-]{11})/,\n  /(?:youtu\\.be\\/)([a-zA-Z0-9_-]{11})/,\n  /(?:youtube\\.com\\/embed\\/)([a-zA-Z0-9_-]{11})/,\n  /(?:youtube\\.com\\/shorts\\/)([a-zA-Z0-9_-]{11})/\n];\n\nlet videoId = null;\nfor (const pattern of patterns) {\n  const match = url.match(pattern);\n  if (match) { videoId = match[1]; break; }\n}\n\nif (!videoId) throw new Error('URL YouTube invalide: ' + url);\n\nconst options = input.body?.options || input.options || {};\n\nreturn [{\n  json: {\n    video_id: videoId,\n    original_url: url.split('&')[0], // Nettoie les params comme &t=\n    session_id: input.sessionId || null, // Garde le sessionId pour le chat\n    options: {\n      generate_linkedin: options.generate_linkedin !== false,\n      generate_twitter: options.generate_twitter !== false,\n      generate_newsletter: options.generate_newsletter === true,\n      language: options.language || 'fr',\n      notify_slack: options.notify_slack === true\n    },\n    started_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "b0da1267-a395-44cb-8c4e-016cc0ba40ad",
+      "name": "[EXTRACT] Parse URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5616,
+        -592
+      ],
+      "notes": "🔗 EXTRACTION VIDEO ID\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nExtrait le video_id (11 chars) de l'URL.\n\n✅ Formats supportés:\n• youtube.com/watch?v=XXX\n• youtu.be/XXX\n• youtube.com/embed/XXX\n• youtube.com/shorts/XXX\n\n📤 Output: video_id, original_url, options, started_at"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1792,
+        -304
+      ],
+      "id": "c57ea71b-b8ef-419c-9b2d-3cd41ac48bdd",
+      "name": "[ANALYZE] Merge AI",
+      "notes": "🔀 FUSION ANALYSES IA\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCombine Summary + Insights.\n\nMode: Combine by Position\n📤 Output: Données IA fusionnées"
+    },
+    {
+      "parameters": {
+        "tableId": "youtube_analyses",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "video_id",
+              "fieldValue": "={{ $('[EXTRACT] Build Context').item.json.video_id }}"
+            },
+            {
+              "fieldId": "video_url",
+              "fieldValue": "={{ $('[EXTRACT] Build Context').item.json.url }}"
+            },
+            {
+              "fieldId": "video_title",
+              "fieldValue": "={{ $('[EXTRACT] Build Context').item.json.title }}"
+            },
+            {
+              "fieldId": "channel_name",
+              "fieldValue": "={{ $('[EXTRACT] Build Context').item.json.channel.name }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -4272,
+        -304
+      ],
+      "id": "6e7f949a-6242-425d-bd90-6e90fe4dbb73",
+      "name": "[DB] Create Entry",
+      "credentials": {
+        "supabaseApi": {
+          "id": "dsWVAzaapOrxAoXP",
+          "name": "Supabase account 3"
+        }
+      },
+      "notes": "💾 CRÉATION ENTRÉE DB\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCrée une ligne vide pour marquer le traitement.\n\n📊 Table: youtube_analyses\n📝 Data: video_id, video_url, video_title, channel_name\n⚠️ analysis_data = NULL (rempli plus tard)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -4720,
+        -592
+      ],
+      "id": "c075dec2-3fa4-48ad-ad55-fe7b13fac51d",
+      "name": "[CACHE] Merge Data",
+      "notes": "🔀 FUSION DONNÉES CACHE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCombine Check Supabase + Build Context.\n\nMode: Combine by Position\n📤 Output: Contexte complet avec info cache"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -5840,
+        -496
+      ],
+      "id": "8561337c-466d-4c66-ba85-bbfdd7d3680a",
+      "name": "When chat message received",
+      "webhookId": "a46ebba9-62a8-4d42-a800-470a3dd6a738",
+      "notes": "💬 POINT D'ENTRÉE - Chat\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nReçoit une URL via chat interactif.\n\n📥 Input: Message texte avec URL YouTube\n📤 Output: chatInput, sessionId"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Crée un post LinkedIn viral basé sur cette analyse vidéo.\n\n## VIDÉO\nTitre: {{ $json.video.title }}\nChaîne: {{ $json.video.channel.name }}\nScore qualité: {{ $json.quality_score.grade }}\n\n## RÉSUMÉ\n{{ $json.summary.executive_summary || $json.summary.one_liner || 'N/A' }}\n\n## POINTS CLÉS\n{{ $json.summary.key_points ? $json.summary.key_points.join('\\n• ') : 'N/A' }}\n\n## MEILLEURS INSIGHTS\n{{ $json.insights ? $json.insights.slice(0,3).map(i => i.insight).join('\\n• ') : 'N/A' }}\n\n## CITATIONS MÉMORABLES\n{{ $json.quotes ? $json.quotes.slice(0,2).map(q => '\"' + q.quote + '\"').join('\\n') : 'N/A' }}\n\n## ACTIONS CONCRÈTES\n{{ $json.takeaways ? $json.takeaways.slice(0,3).map(t => t.action || t).join('\\n• ') : 'N/A' }}\n\nGénère le post LinkedIn optimisé."
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "Tu es un expert en personal branding LinkedIn avec 10 ans d'expérience. Tu crées des posts qui génèrent massivement de l'engagement.\n\nFORMAT DU POST LINKEDIN:\n1. HOOK (première ligne ULTRA accrocheuse - doit arrêter le scroll)\n   - Commence par un emoji fort\n   - Pose une question provocante OU partage une stat choc OU fais une déclaration audacieuse\n   \n2. PATTERN INTERRUPT (ligne 2-3)\n   - Crée de la curiosité\n   - \"Voici ce que j'ai découvert...\" / \"La vérité, c'est que...\"\n\n3. CORPS (valeur pure)\n   - Bullet points avec emojis\n   - Un insight par ligne\n   - Facile à scanner sur mobile\n   - Espacement généreux\n\n4. STORY/EXEMPLE (optionnel mais puissant)\n   - Un exemple concret\n   - Rend le contenu mémorable\n\n5. CTA (Call-to-Action)\n   - Question engageante qui invite au commentaire\n   - Facile à répondre\n\n6. HASHTAGS (3-5 max, à la fin)\n\nSTYLE:\n- Lignes courtes (max 2 phrases par bloc)\n- Sauts de ligne APRÈS CHAQUE PHRASE pour lisibilité mobile\n- Emojis stratégiques (pas trop, bien placés)\n- Ton: professionnel mais humain et accessible\n- Longueur: 150-280 mots (sweet spot LinkedIn)\n- PAS de lien dans le post (LinkedIn pénalise)\n\nGÉNÈRE UN JSON:\n{\n  \"linkedin_post\": {\n    \"hook\": \"La première ligne d'accroche\",\n    \"full_post\": \"Le post complet prêt à copier-coller\",\n    \"hashtags\": [\"#tag1\", \"#tag2\", \"#tag3\"],\n    \"estimated_engagement\": \"low|medium|high|viral\",\n    \"best_posting_time\": \"Mardi 8h ou Mercredi 12h\",\n    \"cta_type\": \"question|poll|debate|share\"\n  }\n}\n\nJSON UNIQUEMENT.",
+          "maxTokens": 2000,
+          "temperature": 0.7
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        -800
+      ],
+      "id": "981379b5-15e0-4414-9c3a-049e0197d2d4",
+      "name": "[GEN] AI - LinkedIn",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "💼 GÉNÉRATION LINKEDIN\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCrée un post LinkedIn viral.\n\n🤖 Model: Claude Sonnet 4.5\n🌡️ Temperature: 0.7\n📊 Max Tokens: 2000\n\n📤 Output: hook, body, cta, hashtags, full_post"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "value": "2c292ae4-2170-800a-b107-e6c03178657d",
+          "mode": "list",
+          "cachedResultName": "YouTube Analyses",
+          "cachedResultUrl": "https://www.notion.so/2c292ae42170800ab107e6c03178657d"
+        },
+        "title": "={{ $json.video.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "url|url",
+              "urlValue": "={{ $json.video.url }}"
+            },
+            {
+              "key": "Chaîne|select",
+              "selectValue": "={{ $json.video.channel.name }}"
+            },
+            {
+              "key": "Score|number",
+              "numberValue": "={{ $json.quality_score.score || 0 }}"
+            },
+            {
+              "key": "Type|select",
+              "selectValue": "={{ $json.classification.content_type }}"
+            },
+            {
+              "key": "Sentiment|select",
+              "selectValue": "={{ $json.sentiment.overall === 'positive' ? '😊 Positif' : ($json.sentiment.overall === 'negative' ? '😞 Négatif' : '😐 Neutre') }}"
+            },
+            {
+              "key": "Durée (min)|number",
+              "numberValue": "={{ Math.round(($json.video.duration_seconds || 0) / 60) }}"
+            },
+            {
+              "key": "Vues|number",
+              "numberValue": "={{ $json.video.view_count || 0 }}"
+            },
+            {
+              "key": "Date Publi|date",
+              "date": "={{ $json.video.publish_date }}"
+            },
+            {
+              "key": "Date Analyse|date",
+              "date": "={{ $json.generated_at }}"
+            },
+            {
+              "key": "Linkedin|checkbox",
+              "checkboxValue": "={{ $json.generated_content?.linkedin ? true : false }}"
+            },
+            {
+              "key": "Twitter|checkbox",
+              "checkboxValue": "={{ $json.generated_content?.twitter ? true : false }}"
+            },
+            {
+              "key": "Newsletter|checkbox",
+              "checkboxValue": "={{ $json.generated_content?.newsletter ? true : false }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        -96,
+        -224
+      ],
+      "id": "6f954335-beda-4e45-8922-5ac2f7de93cb",
+      "name": "[NOTION] Create Page",
+      "credentials": {
+        "notionApi": {
+          "id": "kotPvexNMX0yxgC5",
+          "name": "Notion account"
+        }
+      },
+      "notes": "📄 CRÉATION PAGE NOTION\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCrée une page dans la database Notion.\n\n📊 Properties:\n• Titre, URL, Chaîne, Score, Type\n• Sentiment, Topics, Durée, Vues\n• LinkedIn ✅, Twitter ✅, Newsletter ✅"
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $('[OUTPUT] Build Report').first().json;\nconst pageId = $('[NOTION] Create Page').first().json.id;\n\nconst blocks = [\n  // Header TL;DR\n  {\n    object: \"block\",\n    type: \"heading_2\",\n    heading_2: {\n      rich_text: [{ type: \"text\", text: { content: \"🎯 TL;DR\" } }]\n    }\n  },\n  {\n    object: \"block\",\n    type: \"callout\",\n    callout: {\n      rich_text: [{ type: \"text\", text: { content: report.summary?.one_liner || \"Pas de résumé disponible\" } }],\n      icon: { emoji: \"💡\" }\n    }\n  },\n  \n  // Résumé Exécutif\n  {\n    object: \"block\",\n    type: \"heading_2\",\n    heading_2: {\n      rich_text: [{ type: \"text\", text: { content: \"📝 Résumé Exécutif\" } }]\n    }\n  },\n  {\n    object: \"block\",\n    type: \"paragraph\",\n    paragraph: {\n      rich_text: [{ type: \"text\", text: { content: report.summary?.executive_summary || \"Non disponible\" } }]\n    }\n  },\n  \n  { object: \"block\", type: \"divider\", divider: {} },\n  \n  // Points Clés\n  {\n    object: \"block\",\n    type: \"heading_2\",\n    heading_2: {\n      rich_text: [{ type: \"text\", text: { content: \"🔑 Points Clés\" } }]\n    }\n  }\n];\n\n// Ajouter les key points\n(report.summary?.key_points || []).forEach(point => {\n  blocks.push({\n    object: \"block\",\n    type: \"bulleted_list_item\",\n    bulleted_list_item: {\n      rich_text: [{ type: \"text\", text: { content: point } }]\n    }\n  });\n});\n\nblocks.push({ object: \"block\", type: \"divider\", divider: {} });\n\n// Chapitres\nblocks.push({\n  object: \"block\",\n  type: \"heading_2\",\n  heading_2: {\n    rich_text: [{ type: \"text\", text: { content: \"📚 Chapitres\" } }]\n  }\n});\n\n(report.chapters || []).forEach(ch => {\n  blocks.push({\n    object: \"block\",\n    type: \"callout\",\n    callout: {\n      rich_text: [{ \n        type: \"text\", \n        text: { content: `${ch.timestamp || \"00:00\"} - ${ch.title || \"Sans titre\"}\\n${ch.summary || \"\"}` } \n      }],\n      icon: { emoji: \"📌\" }\n    }\n  });\n});\n\nblocks.push({ object: \"block\", type: \"divider\", divider: {} });\n\n// Insights\nblocks.push({\n  object: \"block\",\n  type: \"heading_2\",\n  heading_2: {\n    rich_text: [{ type: \"text\", text: { content: \"💡 Insights\" } }]\n  }\n});\n\n(report.insights || []).forEach(insight => {\n  const text = typeof insight === 'string' ? insight : insight.insight;\n  const category = insight.category || 'general';\n  const importance = insight.importance || 'medium';\n  blocks.push({\n    object: \"block\",\n    type: \"callout\",\n    callout: {\n      rich_text: [{ \n        type: \"text\", \n        text: { content: `${text}\\n\\n📂 ${category} • ${importance}` } \n      }],\n      icon: { emoji: importance === 'high' ? \"🔥\" : \"💡\" }\n    }\n  });\n});\n\nblocks.push({ object: \"block\", type: \"divider\", divider: {} });\n\n// Citations\nif (report.quotes && report.quotes.length > 0) {\n  blocks.push({\n    object: \"block\",\n    type: \"heading_2\",\n    heading_2: {\n      rich_text: [{ type: \"text\", text: { content: \"💬 Citations Mémorables\" } }]\n    }\n  });\n  \n  report.quotes.forEach(q => {\n    const quoteText = typeof q === 'string' ? q : q.quote;\n    blocks.push({\n      object: \"block\",\n      type: \"quote\",\n      quote: {\n        rich_text: [{ type: \"text\", text: { content: quoteText || \"\" } }]\n      }\n    });\n  });\n  \n  blocks.push({ object: \"block\", type: \"divider\", divider: {} });\n}\n\n// Takeaways\nblocks.push({\n  object: \"block\",\n  type: \"heading_2\",\n  heading_2: {\n    rich_text: [{ type: \"text\", text: { content: \"✅ Actions à Retenir\" } }]\n  }\n});\n\n(report.takeaways || []).forEach(t => {\n  const actionText = typeof t === 'string' ? t : t.action;\n  blocks.push({\n    object: \"block\",\n    type: \"to_do\",\n    to_do: {\n      rich_text: [{ type: \"text\", text: { content: actionText || \"\" } }],\n      checked: false\n    }\n  });\n});\n\nblocks.push({ object: \"block\", type: \"divider\", divider: {} });\n\n// Contenu Généré\nblocks.push({\n  object: \"block\",\n  type: \"heading_2\",\n  heading_2: {\n    rich_text: [{ type: \"text\", text: { content: \"📱 Contenu Généré\" } }]\n  }\n});\n\n// LinkedIn\nif (report.generated_content?.linkedin) {\n  blocks.push({\n    object: \"block\",\n    type: \"heading_3\",\n    heading_3: {\n      rich_text: [{ type: \"text\", text: { content: \"💼 LinkedIn\" } }]\n    }\n  });\n  \n  const linkedinText = report.generated_content.linkedin.full_post || \n                       report.generated_content.linkedin.post ||\n                       JSON.stringify(report.generated_content.linkedin, null, 2);\n  \n  // Notion limite les blocks à 2000 caractères, on split si nécessaire\n  const chunks = linkedinText.match(/.{1,1900}/gs) || [linkedinText];\n  chunks.forEach(chunk => {\n    blocks.push({\n      object: \"block\",\n      type: \"code\",\n      code: {\n        rich_text: [{ type: \"text\", text: { content: chunk } }],\n        language: \"plain text\"\n      }\n    });\n  });\n}\n\n// Twitter\nif (report.generated_content?.twitter) {\n  blocks.push({\n    object: \"block\",\n    type: \"heading_3\",\n    heading_3: {\n      rich_text: [{ type: \"text\", text: { content: \"🐦 Twitter Thread\" } }]\n    }\n  });\n  \n  const tweets = report.generated_content.twitter.tweets || [];\n  const twitterText = tweets.map(t => `${t.number || ''}/ ${t.content || t}`).join('\\n\\n');\n  \n  blocks.push({\n    object: \"block\",\n    type: \"code\",\n    code: {\n      rich_text: [{ type: \"text\", text: { content: twitterText || JSON.stringify(report.generated_content.twitter, null, 2) } }],\n      language: \"plain text\"\n    }\n  });\n}\n\n// Newsletter\nif (report.generated_content?.newsletter) {\n  blocks.push({\n    object: \"block\",\n    type: \"heading_3\",\n    heading_3: {\n      rich_text: [{ type: \"text\", text: { content: \"📧 Newsletter\" } }]\n    }\n  });\n  \n  const nl = report.generated_content.newsletter;\n  const newsletterText = `📌 Sujet: ${nl.subject_line || nl.subject || ''}\\n\\n${nl.preview_text || ''}\\n\\n${nl.intro_paragraph || nl.intro || ''}\\n\\n${(nl.bullet_teaser || []).map(b => `• ${b}`).join('\\n')}`;\n  \n  blocks.push({\n    object: \"block\",\n    type: \"code\",\n    code: {\n      rich_text: [{ type: \"text\", text: { content: newsletterText } }],\n      language: \"plain text\"\n    }\n  });\n}\n\n// Score & Metadata\nblocks.push({ object: \"block\", type: \"divider\", divider: {} });\n\nblocks.push({\n  object: \"block\",\n  type: \"heading_2\",\n  heading_2: {\n    rich_text: [{ type: \"text\", text: { content: \"📊 Métadonnées\" } }]\n  }\n});\n\nconst score = report.quality_score?.score || 0;\nconst grade = report.quality_score?.grade || (score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F');\n\nblocks.push({\n  object: \"block\",\n  type: \"callout\",\n  callout: {\n    rich_text: [{ \n      type: \"text\", \n      text: { content: `Score: ${score}/100 (${grade})\\nDurée: ${report.video?.duration_formatted || 'N/A'}\\nVues: ${(report.video?.view_count || 0).toLocaleString()}\\nAnalysé le: ${new Date().toLocaleDateString('fr-FR')}` } \n    }],\n    icon: { emoji: \"📈\" }\n  }\n});\n\nreturn [{ \n  json: { \n    pageId: pageId,\n    blocks: blocks \n  } \n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        128,
+        -224
+      ],
+      "id": "cfc4f93e-50b5-465a-b329-df61803b255d",
+      "name": "[NOTION] Prepare Blocks",
+      "notes": "🧱 PRÉPARATION BLOCKS NOTION\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nConstruit les blocks de contenu.\n\n📤 Output: Array de blocks Notion\n• TL;DR (callout)\n• Résumé exécutif (paragraph)\n• Points clés (bullets)\n• Chapitres (callouts)\n• Insights (callouts)\n• Citations (quotes)\n• Takeaways (todos)\n• Contenus générés (code)"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/blocks/{{ $json.pageId }}/children",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    \"children\": $json.blocks\n  }\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        352,
+        -224
+      ],
+      "id": "8d2d4457-53aa-4304-8703-4425486ca01f",
+      "name": "[NOTION] Add Content (HTTP Request)",
+      "credentials": {
+        "notionApi": {
+          "id": "kotPvexNMX0yxgC5",
+          "name": "Notion account"
+        }
+      },
+      "notes": "📝 AJOUT CONTENU NOTION\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAppelle l'API Notion pour ajouter les blocks.\n\n🔗 PATCH /v1/blocks/{pageId}/children\n📤 Body: { children: blocks[] }"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = items[0].json;\nconst segments = input.transcript.segments || [];\n// ~4000 mots par morceau pour avoir assez de contexte\nconst CHUNK_SIZE = 4000; \n\nlet chunks = [];\nlet currentChunk = [];\nlet currentWordCount = 0;\n\n// 1. Découpage intelligent\nfor (const seg of segments) {\n  const segWords = seg.text.split(/\\s+/).length;\n  \n  if (currentWordCount + segWords > CHUNK_SIZE && currentChunk.length > 0) {\n    chunks.push({\n      text: currentChunk.map(s => s.text).join(' '),\n      start: currentChunk[0].start_formatted,\n      end: seg.start_formatted\n    });\n    currentChunk = [];\n    currentWordCount = 0;\n  }\n  \n  currentChunk.push(seg);\n  currentWordCount += segWords;\n}\n\n// Ajouter le dernier morceau s'il reste des segments\nif (currentChunk.length > 0) {\n  chunks.push({\n    text: currentChunk.map(s => s.text).join(' '),\n    start: currentChunk[0].start_formatted,\n    end: segments[segments.length-1].start_formatted\n  });\n}\n\n// 2. RETOURNER PLUSIEURS ITEMS (C'est le secret !)\n// n8n va exécuter le noeud suivant pour CHAQUE item de cette liste\nreturn chunks.map((chunk, index) => ({\n  json: {\n    ...input, // On garde tout le contexte (titre, url, etc)\n    processing_mode: 'chunked',\n    chunk_index: index + 1,\n    total_chunks: chunks.length,\n    chunk_content: chunk.text,\n    chunk_start: chunk.start,\n    chunk_end: chunk.end,\n    // On vide le full_text lourd pour alléger la mémoire pendant la boucle\n    transcript: { ...input.transcript, full_text: '' }\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3168,
+        -800
+      ],
+      "id": "ac937ed1-db6e-4e49-be7a-9a17da779605",
+      "name": "[CHUNK] Prep Map-Reduce",
+      "notes": "✂️ PRÉPARATION MAP-REDUCE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nDécoupe le transcript en chunks de ~4000 mots.\n\n📥 Input: transcript.segments\n📤 Output: Multiple items (1 par chunk)\n\n🔄 Pattern: Retourne N items → node suivant exécuté N fois"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-haiku-4-5-20251001",
+          "mode": "list",
+          "cachedResultName": "claude-haiku-4-5-20251001"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Tu es un expert en analyse vidéo. Voici la partie {{ $json.chunk_index }} sur {{ $json.total_chunks }} d'une vidéo intitulée \"{{ $json.title || $json.video_title }}\".\n\nTIMESTAMP: {{ $json.chunk_start }} à {{ $json.chunk_end }}\n\nCONTENU DU SEGMENT:\n{{ $json.chunk_content }}\n\nTA MISSION:\nRésume ce segment en conservant une densité d'information maximale. \n- Capture les arguments clés, les chiffres exacts, et les citations marquantes.\n- Ignore les répétitions et le bla-bla.\n- Si c'est une intro/outro inutile, résume en 1 phrase.\n\nFORMAT:\n[Partie {{ $json.chunk_index }} - {{ $json.chunk_start }}]\n(Ton résumé dense ici...)"
+            }
+          ]
+        },
+        "options": {
+          "system": "Tu es un compresseur d'information. Ton but est de réduire la taille du texte par 10 tout en gardant 100% du sens, des faits et des chiffres.",
+          "maxTokens": 1024
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -2944,
+        -800
+      ],
+      "id": "4b350ec9-b01c-4364-acf3-a2061e601965",
+      "name": "[AI] MAP - Summarize Chunk",
+      "credentials": {
+        "anthropicApi": {
+          "id": "2GKdmLELzESn1eRv",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "🧠 MAP - RÉSUMÉ CHUNK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRésume chaque chunk individuellement.\n\n🤖 Model: Claude Haiku 4.5 (rapide)\n🌡️ Temperature: 0.3\n📤 Output: Résumé condensé du chunk"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Récupération intelligente des chunks\nconst allChunks = items.map((item, index) => {\n    const j = item.json;\n    \n    // On cherche le texte partout : output (LangChain standard), text, content, message...\n    let textFound = j.output || j.text || j.content || j.message?.content || \"\";\n    \n    // Si c'est un objet (parfois le cas avec LangChain), on essaie d'en extraire le texte\n    if (typeof textFound === 'object') {\n        textFound = textFound.content || textFound.text || JSON.stringify(textFound);\n    }\n\n    // DEBUG : Si un chunk est vide, on le signale pour comprendre pourquoi\n    if (!textFound || textFound.length < 10) {\n        return `[ERREUR: Chunk ${index + 1} vide ou mal formaté]`;\n    }\n\n    return textFound;\n});\n\n// 2. Récupération du contexte original (depuis le premier item)\n// On s'assure de récupérer les infos de la vidéo, pas les infos du chunk IA\nconst originalContext = items[0].json;\n\n// 3. Agrégation\nconst aggregatedText = allChunks.join('\\n\\n=== COUPURE ===\\n\\n');\n\n// 4. Calcul des mots (plus robuste)\nconst totalWords = aggregatedText.split(/\\s+/).length;\n\n// 5. Reconstruction de la structure de sortie\nreturn [{\n  json: {\n    // On garde les métadonnées vidéo (ID, Titre, Channel...)\n    // Note : On filtre pour ne pas garder les champs temporaires du chunking\n    video_id: originalContext.video_id,\n    url: originalContext.url,\n    title: originalContext.title,\n    channel: originalContext.channel,\n    thumbnail: originalContext.thumbnail,\n    duration_seconds: originalContext.duration_seconds,\n    duration_formatted: originalContext.duration_formatted,\n    view_count: originalContext.view_count,\n    publish_date: originalContext.publish_date,\n    options: originalContext.options,\n    started_at: originalContext.started_at,\n    \n    transcript: {\n      available: true,\n      source: 'apify_aggregated_map_reduce',\n      // C'est ici qu'on injecte le super-résumé\n      full_text: aggregatedText,\n      word_count: totalWords,\n      is_compressed: true,\n      chunk_count: items.length\n    },\n    \n    // Flag pour le debug\n    processing_mode: 'map_reduce_completed'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2592,
+        -800
+      ],
+      "id": "b45f1d18-e371-4890-80d8-282a36f6847c",
+      "name": "[CODE] Reduce & Aggregate",
+      "notes": "📊 REDUCE - AGRÉGATION\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCombine tous les résumés de chunks.\n\n📥 Input: Array de résumés\n📤 Output: Transcript agrégé unique\n📝 Source: 'apify_aggregated_map_reduce'"
+    },
+    {
+      "parameters": {
+        "actorSource": "store",
+        "actorId": {
+          "__rl": true,
+          "value": "faVsWy9VTSNVIhWpR",
+          "mode": "list",
+          "cachedResultName": "Youtube Transcript Scraper (pintostudio/youtube-transcript-scraper)",
+          "cachedResultUrl": "https://console.apify.com/actors/faVsWy9VTSNVIhWpR/input"
+        },
+        "customBody": "={\n  \"videoUrl\": \"https://www.youtube.com/watch?v={{ $('[EXTRACT] Build Context').item.json.video_id }}\",\n  \"language\": \"{{ $('[EXTRACT] Build Context').item.json.options.language }}\",\n  \"preferredLanguage\": \"{{ $('[EXTRACT] Build Context').item.json.options.language }}\",\n  \"fallbackLanguage\": \"en\"\n}",
+        "timeout": {}
+      },
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        -4048,
+        -304
+      ],
+      "id": "19ee731c-e10f-406e-b332-8470666073d3",
+      "name": "[TRANSCR] Apify Scraper",
+      "credentials": {
+        "apifyApi": {
+          "id": "2BwYqcSLgdwQXVyV",
+          "name": "Apify account"
+        }
+      },
+      "notes": "🤖 APIFY - LANCEMENT SCRAPER\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLance l'actor de transcription YouTube.\n\n🎯 Actor: katerinah/youtube-transcript-scraper\n📤 Output: Run ID pour polling"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Récupération des données Apify\nconst apifyItems = items.map(i => i.json);\nconst context = $('[EXTRACT] Build Context').first().json;\n\nlet rawSegments = [];\n\n// 1. DÉTECTION INTELLIGENTE DE LA STRUCTURE\nif (apifyItems.length > 0) {\n    const firstItem = apifyItems[0];\n\n    // CAS A : Structure \"katerinah/youtube-transcript-scraper\" (votre cas actuel)\n    // Les segments sont dans un tableau sous la clé \"data\"\n    if (Array.isArray(firstItem.data)) {\n        rawSegments = firstItem.data;\n    }\n    // CAS B : Structure Plate (Liste directe d'items)\n    else if (firstItem.text !== undefined) {\n        rawSegments = apifyItems;\n    }\n    // CAS C : Structure encapsulée (requestOutput)\n    else if (firstItem.requestOutput) {\n        try { rawSegments = JSON.parse(firstItem.requestOutput); } catch(e) {}\n    }\n}\n\n// 2. Vérification de sécurité\nif (!rawSegments || rawSegments.length === 0) {\n  return [{\n    json: {\n      ...context,\n      transcript: {\n        available: false,\n        word_count: 0,\n        error: \"Adaptateur : Aucune donnée trouvée (Format non reconnu)\"\n      }\n    }\n  }];\n}\n\n// 3. Mapping et Nettoyage\nconst segments = rawSegments\n  .map((s, i) => {\n    // Normalisation du texte\n    const textContent = s.text || s.caption || \"\";\n    \n    // Normalisation du temps (votre JSON a \"start\" en secondes sous forme de chaîne \"8.042\")\n    let seconds = 0;\n    if (s.start !== undefined) seconds = parseFloat(s.start);\n    else if (s.offset !== undefined) seconds = parseFloat(s.offset);\n    else if (s.startTime !== undefined) seconds = parseFloat(s.startTime);\n    \n    return {\n        index: i,\n        start_ms: Math.floor(seconds * 1000),\n        start_formatted: new Date(seconds * 1000).toISOString().substr(14, 5),\n        text: textContent.trim()\n    };\n  })\n  .filter(s => s.text.length > 0 && !s.text.includes('[Music]')); // Filtre basique\n\n// 4. Vérification finale\nif (segments.length === 0) {\n  return [{\n    json: {\n      ...context,\n      transcript: { available: false, word_count: 0 }\n    }\n  }];\n}\n\n// 5. Reconstruction\nconst fullText = segments.map(s => s.text).join(' ');\nconst wordCount = fullText.split(/\\s+/).length;\n\nreturn [{\n  json: {\n    ...context,\n    transcript: {\n      available: true,\n      source: 'apify_katerinah',\n      full_text: fullText,\n      word_count: wordCount,\n      segments: segments\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3616,
+        -304
+      ],
+      "id": "b277db04-b4f3-45cd-80c5-465b643a28eb",
+      "name": "[TRANSCR] Adapter",
+      "notes": "🔄 ADAPTATEUR FORMAT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNormalise les données Apify vers format interne.\n\n📥 Input: Format Apify (data[].text, data[].start)\n📤 Output: segments[].{index, start_ms, start_formatted, text}"
+    },
+    {
+      "parameters": {
+        "resource": "Datasets",
+        "datasetId": "={{ $json.defaultDatasetId }}",
+        "limit": null
+      },
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        -3840,
+        -304
+      ],
+      "id": "61a1152b-f84d-4242-8eba-8868728b6478",
+      "name": "[TRANSCR] Get Data",
+      "credentials": {
+        "apifyApi": {
+          "id": "2BwYqcSLgdwQXVyV",
+          "name": "Apify account"
+        }
+      },
+      "notes": "📥 APIFY - RÉCUPÉRATION DATA\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nRécupère les résultats du scraper.\n\n📤 Output: Array de segments avec texte et timestamps"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "[TRIGGER] Webhook": {
+      "main": [
+        [
+          {
+            "node": "[EXTRACT] Parse URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[EXTRACT] Build Context": {
+      "main": [
+        [
+          {
+            "node": "[CACHE] Check Supabase",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[CACHE] Merge Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[CACHE] Check Supabase": {
+      "main": [
+        [
+          {
+            "node": "[CACHE] Merge Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CACHE] IF Exists": {
+      "main": [
+        [
+          {
+            "node": "[CACHE] Return Cached",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[DB] Create Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CACHE] Return Cached": {
+      "main": [
+        [
+          {
+            "node": "[OUTPUT] Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ROUTE] Check Duration": {
+      "main": [
+        [
+          {
+            "node": "[CHUNK] Prep Map-Reduce",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[ROUTE] Merge Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[ANALYZE] Merge Results": {
+      "main": [
+        [
+          {
+            "node": "[SCORE] Calculate Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[SCORE] Calculate Quality": {
+      "main": [
+        [
+          {
+            "node": "[GEN] IF LinkedIn",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[GEN] IF Twitter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[GEN] IF Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] IF LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "[GEN] AI - LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[GEN] LinkedIn NoOp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] IF Twitter": {
+      "main": [
+        [
+          {
+            "node": "[GEN] AI - Twitter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[GEN] Twitter NoOp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] IF Newsletter": {
+      "main": [
+        [
+          {
+            "node": "[GEN] AI - Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[GEN] Newsletter NoOp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] LinkedIn NoOp": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] Twitter NoOp": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[GEN] Newsletter NoOp": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "[GEN] Merge Content": {
+      "main": [
+        [
+          {
+            "node": "[OUTPUT] Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[OUTPUT] Build Report": {
+      "main": [
+        [
+          {
+            "node": "[DB] Save to Supabase",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[NOTION] Create Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] Save to Supabase": {
+      "main": [
+        [
+          {
+            "node": "[OUTPUT] Merge Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[NOTIFY] Slack": {
+      "main": [
+        [
+          {
+            "node": "[OUTPUT] Merge Final",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[OUTPUT] Merge Final": {
+      "main": [
+        [
+          {
+            "node": "[OUTPUT] Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ERROR] Trigger": {
+      "main": [
+        [
+          {
+            "node": "[ERROR] Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ERROR] Format": {
+      "main": [
+        [
+          {
+            "node": "[ERROR] Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ERROR] Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "[ERROR] Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ROUTE] Merge Paths": {
+      "main": [
+        [
+          {
+            "node": "[ANALYZE] AI - Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[ANALYZE] AI - Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ANALYZE] AI - Summary": {
+      "main": [
+        [
+          {
+            "node": "[ANALYZE] Merge AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ANALYZE] AI - Insights": {
+      "main": [
+        [
+          {
+            "node": "[ANALYZE] Merge AI",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[GEN] AI - Twitter": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "[GEN] AI - Newsletter": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "[EXTRACT] YouTube API": {
+      "main": [
+        [
+          {
+            "node": "[EXTRACT] Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[EXTRACT] Parse URL": {
+      "main": [
+        [
+          {
+            "node": "[EXTRACT] YouTube API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ANALYZE] Merge AI": {
+      "main": [
+        [
+          {
+            "node": "[ANALYZE] Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] Create Entry": {
+      "main": [
+        [
+          {
+            "node": "[TRANSCR] Apify Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CACHE] Merge Data": {
+      "main": [
+        [
+          {
+            "node": "[CACHE] IF Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "[EXTRACT] Parse URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GEN] AI - LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "[GEN] Merge Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[NOTION] Create Page": {
+      "main": [
+        [
+          {
+            "node": "[NOTION] Prepare Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[NOTION] Prepare Blocks": {
+      "main": [
+        [
+          {
+            "node": "[NOTION] Add Content (HTTP Request)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[NOTION] Add Content (HTTP Request)": {
+      "main": [
+        [
+          {
+            "node": "[NOTIFY] Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CHUNK] Prep Map-Reduce": {
+      "main": [
+        [
+          {
+            "node": "[AI] MAP - Summarize Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[AI] MAP - Summarize Chunk": {
+      "main": [
+        [
+          {
+            "node": "[CODE] Reduce & Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CODE] Reduce & Aggregate": {
+      "main": [
+        [
+          {
+            "node": "[ROUTE] Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[TRANSCR] Apify Scraper": {
+      "main": [
+        [
+          {
+            "node": "[TRANSCR] Get Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[TRANSCR] Adapter": {
+      "main": [
+        [
+          {
+            "node": "[ROUTE] Check Duration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[TRANSCR] Get Data": {
+      "main": [
+        [
+          {
+            "node": "[TRANSCR] Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "e2d2eea2-9382-46c4-995e-f177682c084b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c6116eb8cb3d033e596ffea0bb4b54dddf51506251ba65d582c1ad601e44fd2e"
+  },
+  "id": "zDkts8TFq3CVCink",
+  "tags": [
+    {
+      "updatedAt": "2025-12-06T19:52:47.098Z",
+      "createdAt": "2025-12-06T19:52:47.098Z",
+      "id": "BvxASGzu3t2njD0N",
+      "name": "YouTube"
+    },
+    {
+      "updatedAt": "2025-12-06T20:43:19.342Z",
+      "createdAt": "2025-12-06T20:43:19.342Z",
+      "id": "GxN9j8Vky8DM6Eid",
+      "name": "Portfolio"
+    },
+    {
+      "updatedAt": "2025-12-06T19:52:47.124Z",
+      "createdAt": "2025-12-06T19:52:47.124Z",
+      "id": "ZHsKVolgYwDGwN2T",
+      "name": "Content"
+    },
+    {
+      "updatedAt": "2025-12-06T19:52:47.073Z",
+      "createdAt": "2025-12-06T19:52:47.073Z",
+      "id": "x9l1lz6LbZUZH1Rg",
+      "name": "AI"
+    }
+  ]
+}
