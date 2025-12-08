@@ -289,7 +289,7 @@ youtube-analyzer-pro/
 
 ## 🤝 Auteur
 
-**Cyprien** - [Utilia AI](https://utilia.ai)
+**Cyprien** - [Utilia AI](https://utilia-ai.fr)
 
 Fondateur de Utilia AI, formation et consulting spécialisé en automatisation IA.
 
